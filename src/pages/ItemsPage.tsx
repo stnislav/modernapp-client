@@ -1,54 +1,61 @@
-import { useEffect, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { getItems } from "../api/items.api";
 import type { ItemDto } from "../types/item";
 import type { PagedResponse } from "../types/paging";
 import { HttpError } from "../api/http";
+import { useState } from "react";
+import { keepPreviousData } from "@tanstack/react-query";
 
 export function ItemsPage() {
-    const [data, setData] = useState<PagedResponse<ItemDto> | null>(null);
-    const [status, setStatus] = useState<string>("Loading...");
-    const abortRef = useRef<AbortController | null>(null);
 
-    useEffect(() => {
-        abortRef.current?.abort();
-        const ac = new AbortController();
-        abortRef.current = ac;
-
-        (async () => {
-            try {
-                setStatus("Loading...");
-                const result = await getItems(ac.signal);
-                setData(result);
-                setStatus("OK");
-            } catch (e: any) {
-                if (e?.name === "AbortError") return;
-                if (e instanceof HttpError) {
-                    setStatus(`Failed: ${e.status} ${e.statusText}`);
-                    return;
-                }
-                setStatus(`Error: ${e?.message ?? String(e)}`);
-            }
-        })();
-
-        return () => ac.abort();
-    }, []);
-
-    if (status !== "OK") {
+    const [page, setPage] = useState(1);
+    const pageSize = 5;
+    const query = useQuery<PagedResponse<ItemDto>, Error>({
+        queryKey: ["items", page, pageSize],
+        queryFn: ({ signal }) => getItems(signal, page, pageSize),
+        placeholderData: keepPreviousData,
+    });
+    
+    // Loading
+    if (query.isPending) {
         return (
             <div>
                 <h2>Items</h2>
-                <p>{status}</p>
+                <p>Loading...</p>
             </div>
         );
     }
+
+    // Error (your HttpError formatting kept)
+    if (query.isError) {
+        const e = query.error;
+        const message =
+            e instanceof HttpError
+                ? `Failed: ${e.status} ${e.statusText}`
+                : `Error: ${e?.message ?? String(e)}`;
+
+        return (
+            <div>
+                <h2>Items</h2>
+                <p>{message}</p>
+            </div>
+        );
+    }
+
+    const data = query.data;
+    const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
+    const hasNextPage = page <  totalPages;
 
     return (
         <div>
             <h2>Items</h2>
 
-            {data && data.items.length === 0 && <p>No items found.</p>}
+            {/* optional: subtle background refetch indicator */}
+            {query.isFetching && <p style={{ opacity: 0.7 }}>Updating...</p>}
 
-            {data && data.items.length > 0 && (
+            {data.items.length === 0 && <p>No items found.</p>}
+
+            {data.items.length > 0 && (
                 <table style={{ borderCollapse: "collapse", width: "100%" }}>
                     <thead>
                         <tr>
@@ -75,6 +82,25 @@ export function ItemsPage() {
                     </tbody>
                 </table>
             )}
+            <div style={{ display: "flex", gap: 8 }}>
+                <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1 || query.isFetching || query.isPending}
+                >
+                    Prev
+                </button>
+
+                <span>
+                    Page {page} {query.isFetching ? "(updating…)" : ""}
+                </span>
+
+                <button
+                    onClick={() => setPage((p) => p + 1)}
+                    disabled={!hasNextPage || query.isFetching || query.isPending}
+                >
+                    Next
+                </button>
+            </div>
         </div>
     );
 }
